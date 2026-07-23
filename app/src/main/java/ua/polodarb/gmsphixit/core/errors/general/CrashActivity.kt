@@ -11,7 +11,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat.setDecorFitsSystemWindows
-import com.google.firebase.crashlytics.FirebaseCrashlytics
 import ua.polodarb.gmsphixit.BuildConfig
 import ua.polodarb.gmsphixit.R
 import ua.polodarb.gmsphixit.core.errors.general.ExceptionHandler.Companion.STACK_TRACE_KEY
@@ -102,10 +101,8 @@ class ExceptionHandler(
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             }
             context.startActivity(intent)
-            FirebaseCrashlytics.getInstance().recordException(throwable)
             exitProcess(0)
         } catch (e: Exception) {
-            FirebaseCrashlytics.getInstance().recordException(e)
             handler.uncaughtException(thread, throwable)
         }
     }

@@ -11,9 +11,6 @@ plugins {
     id("com.google.dagger.hilt.android")
     id("kotlinx-serialization")
     id("com.google.protobuf")
-    alias(libs.plugins.gms)
-    alias(libs.plugins.firebase.crashlytics)
-    alias(libs.plugins.firebase.perf)
 }
 
 val keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -122,16 +119,6 @@ dependencies {
     // coil
     implementation(libs.bundles.coil)
     implementation("io.ktor:ktor-client-okhttp:3.1.1")
-
-    // Firebase
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.analytics)
-    implementation(libs.firebase.crashlytics)
-    implementation(libs.firebase.performance) {
-        exclude(group = "com.google.protobuf", module = "protobuf-javalite")
-        exclude(group = "com.google.firebase", module = "protolite-well-known-types")
-    }
-    implementation(libs.firebase.cloud.messaging)
 
     // protobuf
     implementation("com.google.protobuf:protobuf-javalite:4.29.2")
