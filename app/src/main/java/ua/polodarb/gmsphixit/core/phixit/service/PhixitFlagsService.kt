@@ -55,11 +55,11 @@ class PhixitFlagsService : RootService() {
         }
 
         override fun updateFlag(packageName: String?, flagName: String?, newValue: Boolean) {
-            stageBoolOverride(requireNotNull(packageName), requireNotNull(flagName), newValue, false)
+            commitBoolOverride(requireNotNull(packageName), requireNotNull(flagName), newValue, false)
         }
 
         override fun addBoolFlag(packageName: String?, flagName: String?, value: Boolean) {
-            stageBoolOverride(requireNotNull(packageName), requireNotNull(flagName), value, true)
+            commitBoolOverride(requireNotNull(packageName), requireNotNull(flagName), value, true)
         }
 
         override fun getAllConfigPackages(): List<String> {
@@ -163,26 +163,28 @@ class PhixitFlagsService : RootService() {
 
     // Read the partitions and overrides linked to the selected committed state.
     private fun requireSupportedSchema() {
-        val required = listOf("config_packages", "experiment_states", "experiment_states_to_partitions",
-            "param_partitions", "experiment_states_to_overrides", "flag_overrides", "flag_overrides_to_commit")
+        val required = listOf("android_packages", "config_packages", "experiment_states", "experiment_states_to_partitions",
+            "param_partitions", "experiment_states_to_overrides", "flag_overrides")
         check(required.all { requiredTable -> schema.allTables.any { it.equals(requiredTable, true) } }) {
             "This Phenotype database schema is not supported. No flags were changed."
         }
     }
 
-    private data class SelectedConfig(val id: Long, val stateId: Long, val accountId: Long)
+    private data class SelectedConfig(val id: Long, val stateId: Long, val accountId: Long, val androidPackage: String)
 
     private fun selectedConfig(name: String): SelectedConfig {
         requireSupportedSchema()
         return gmsDatabase.rawQuery("""
-            SELECT c.config_package_id, e.experiment_state_id, e.account_id
-            FROM config_packages c JOIN experiment_states e
+            SELECT c.config_package_id, e.experiment_state_id, e.account_id, a.name
+            FROM config_packages c
+            JOIN experiment_states e
               ON e.experiment_state_id = c.committed_experiment_state_id
              AND e.config_package_id = c.config_package_id
+            JOIN android_packages a ON a.android_package_id = c.android_package_id
             WHERE c.name = ?
         """.trimIndent(), arrayOf(name)).use { c ->
             check(c.moveToFirst()) { "No committed configuration found for this package." }
-            SelectedConfig(c.getLong(0), c.getLong(1), c.getLong(2))
+            SelectedConfig(c.getLong(0), c.getLong(1), c.getLong(2), c.getString(3))
         }
     }
 
@@ -227,35 +229,99 @@ class PhixitFlagsService : RootService() {
     fun dumpBoolFlags(packageName: String): List<BaseFlagModel.BoolFlag> =
         readCommittedFlags(selectedConfig(packageName)).filterIsInstance<BaseFlagModel.BoolFlag>()
 
-    /** Ask Play services to apply and commit the override, then verify the committed state. */
-    private fun stageBoolOverride(packageName: String, flagName: String, value: Boolean, adding: Boolean) {
+    /**
+     * Commit a boolean override by publishing a new immutable experiment state.
+     * The config_packages pointer is the source of truth for the active state.
+     */
+    private fun commitBoolOverride(packageName: String, flagName: String, value: Boolean, adding: Boolean) {
         require(packageName.isNotBlank() && flagName.isNotBlank()) { "Package and flag name are required." }
-        require(!flagName.contains(',')) { "Flag names containing commas are not supported by the override receiver." }
-        val config = selectedConfig(packageName)
-        val existingFlag = readCommittedFlags(config).find { it.name == flagName }
-        if (adding) check(existingFlag == null) { "A committed flag with this name already exists." }
-        else check(existingFlag is BaseFlagModel.BoolFlag) { "The committed boolean flag was not found." }
-        // Play services requires wildcard scope for immediate commits. It applies the
-        // override to every account for the selected configuration.
-        fun quote(s: String) = "'" + s.replace("'", "'\\''") + "'"
-        val command = "am broadcast -a com.google.android.gms.phenotype.FLAG_OVERRIDE " +
-            "-p com.google.android.gms --es package ${quote(packageName)} --es user ${quote("*")} " +
-            "--ez commit true --esa flags ${quote(flagName)} --esa values ${if (value) "true" else "false"} --esa types boolean"
-        val result = Shell.cmd(command).exec()
-        check(result.isSuccess) { "Could not send the override to Google Play services." }
-        // An Android broadcast result does not report whether the asynchronous operation succeeded.
-        repeat(10) {
-            Thread.sleep(500)
-            val committed = gmsDatabase.rawQuery("""
-                SELECT 1 FROM config_packages c
-                JOIN experiment_states_to_overrides eo ON eo.experiment_state_id = c.committed_experiment_state_id
+        requireSupportedSchema()
+
+        var packageToRestart = ""
+        gmsDatabase.beginTransaction()
+        try {
+            val config = selectedConfig(packageName)
+            packageToRestart = config.androidPackage
+            val existingFlag = readCommittedFlags(config).find { it.name == flagName }
+            if (adding) {
+                check(existingFlag == null) { "A committed flag with this name already exists." }
+            } else {
+                check(existingFlag is BaseFlagModel.BoolFlag) { "The committed boolean flag was not found." }
+            }
+
+            // Retire only an older active override for this account. Historical experiment
+            // states keep their links, while the new state receives only active overrides.
+            gmsDatabase.execSQL("""
+                UPDATE flag_overrides SET active = NULL
+                WHERE config_package_id = ? AND account_id = ? AND active IS 1 AND name = ?
+            """.trimIndent(), arrayOf<Any>(config.id, config.accountId, flagName))
+
+            // Phenotype's boolean override type is 2; store the value as an integer.
+            gmsDatabase.execSQL("""
+                INSERT INTO flag_overrides
+                    (config_package_id, config_package_name, account_id, active, name, value, type, source)
+                VALUES (?, NULL, ?, 1, ?, ?, 2, 0)
+            """.trimIndent(), arrayOf<Any>(config.id, config.accountId, flagName, if (value) 1L else 0L))
+            val overrideId = gmsDatabase.rawQuery("SELECT last_insert_rowid()", null).use { cursor ->
+                check(cursor.moveToFirst()) { "Could not read the new override ID." }
+                cursor.getLong(0)
+            }
+
+            // Copy the committed state, including its ordered partition list. Publishing a new
+            // state keeps old snapshots immutable and lets existing readers use the new pointer.
+            gmsDatabase.execSQL("""
+                INSERT INTO experiment_states
+                    (experiment_token, server_token, serving_version, tokens_tag, config_hash,
+                     registration_generation, account_id, config_package_id)
+                SELECT experiment_token, server_token, serving_version, tokens_tag, config_hash,
+                       registration_generation, account_id, config_package_id
+                FROM experiment_states WHERE experiment_state_id = ?
+            """.trimIndent(), arrayOf(config.stateId))
+            val newStateId = gmsDatabase.rawQuery("SELECT last_insert_rowid()", null).use { cursor ->
+                check(cursor.moveToFirst()) { "Could not read the new experiment state ID." }
+                cursor.getLong(0)
+            }
+            gmsDatabase.execSQL("""
+                INSERT INTO experiment_states_to_partitions (experiment_state_id, ordinal, param_partition_id)
+                SELECT ?, ordinal, param_partition_id
+                FROM experiment_states_to_partitions WHERE experiment_state_id = ?
+            """.trimIndent(), arrayOf(newStateId, config.stateId))
+            gmsDatabase.execSQL("""
+                INSERT INTO experiment_states_to_overrides (experiment_state_id, override_id)
+                SELECT ?, eo.override_id
+                FROM experiment_states_to_overrides eo
                 JOIN flag_overrides f ON f.override_id = eo.override_id
-                WHERE c.config_package_id = ? AND f.name = ? AND f.type = 2 AND f.value = ?
-                  AND f.active = 1 AND f.account_id = (SELECT account_id FROM accounts WHERE name = '*') LIMIT 1
-            """.trimIndent(), arrayOf(config.id.toString(), flagName, if (value) "1" else "0")).use { it.moveToFirst() }
-            if (committed) return
+                WHERE eo.experiment_state_id = ? AND f.config_package_id = ?
+                  AND f.account_id = ? AND f.active IS 1
+            """.trimIndent(), arrayOf(newStateId, config.stateId, config.id, config.accountId))
+            gmsDatabase.execSQL("""
+                INSERT INTO experiment_states_to_overrides (experiment_state_id, override_id)
+                VALUES (?, ?)
+            """.trimIndent(), arrayOf(newStateId, overrideId))
+
+            gmsDatabase.execSQL("""
+                UPDATE config_packages SET committed_experiment_state_id = ?
+                WHERE config_package_id = ? AND committed_experiment_state_id = ?
+            """.trimIndent(), arrayOf(newStateId, config.id, config.stateId))
+            val publishedConfig = selectedConfig(packageName)
+            check(publishedConfig.stateId == newStateId) {
+                "Phenotype did not publish the new committed state."
+            }
+            val publishedFlag = readCommittedFlags(publishedConfig).find { it.name == flagName }
+            check(publishedFlag is BaseFlagModel.BoolFlag && publishedFlag.value == value) {
+                "The new committed state did not expose the requested boolean value."
+            }
+
+            gmsDatabase.setTransactionSuccessful()
+        } finally {
+            gmsDatabase.endTransaction()
         }
-        throw IllegalStateException("Google Play services did not confirm the override. No change is shown as committed.")
+
+        // Restart the owning app so it reloads Phenotype values from the new committed state.
+        if (packageToRestart != "com.google.android.gms" &&
+            packageToRestart.matches(Regex("[A-Za-z0-9_.]+"))) {
+            Shell.cmd("am force-stop $packageToRestart").exec()
+        }
     }
 
     /**
@@ -309,3 +375,4 @@ class PhixitFlagsService : RootService() {
 }
 
 class DatabaseNotFoundException(message: String) : Exception(message)
+
