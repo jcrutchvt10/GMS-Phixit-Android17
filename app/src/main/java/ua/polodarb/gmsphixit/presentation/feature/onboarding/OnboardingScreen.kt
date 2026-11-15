@@ -182,7 +182,7 @@ fun WarningScreen(
                         ) {
                             append("\n\nThis is the first alpha, the app is untested and its impact on devices is unknown.")
                         }
-                        append("\nBy continuing, you accept all risks.\n\nISSUE №1: ALL FLAGS RESET AFTER 24 HOURS. This app is released in hope that the community can find a solution.")
+                        append("\nBy continuing, you accept all risks.")
                     }
                     ClickableText(
                         text = annotatedText,

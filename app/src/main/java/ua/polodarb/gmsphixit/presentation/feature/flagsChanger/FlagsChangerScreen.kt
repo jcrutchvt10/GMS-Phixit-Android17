@@ -113,6 +113,13 @@ fun FlagsChangerScreen(
                     )
                 )
 
+                Text(
+                    text = "Flag changes apply to all accounts for this configuration.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
                 state.error?.let { error ->
                     Card(
                         Modifier

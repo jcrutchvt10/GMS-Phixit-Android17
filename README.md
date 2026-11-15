@@ -13,10 +13,9 @@
 - Root access required
 - Fast flag search, add, and edit
 
-## ⚠️ Why This App Is Currently Unusable
-### ⚠️ ALL FLAGS RESET AFTER 24 HOURS
+## Flag persistence
 
-Any changes made to flags are automatically reverted by Google Play Services within 24 hours. This makes it impossible to use the app for persistent flag modifications. The app is released in hope that the community will find a workaround for this limitation.
+Persistence of flag changes on current Google Play services versions has not been verified. Changes to downloaded flag partitions may be replaced during a refresh.
 
 ## Why this project?
 

@@ -42,10 +42,7 @@ fun PackagePickerScreen(
     val expandedSections = viewModel.expandedSections
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-        topBar = {
-            WarningBanner()
-        }
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
     ) {
         Box(
             modifier = Modifier

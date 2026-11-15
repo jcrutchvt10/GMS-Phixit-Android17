@@ -80,24 +80,15 @@ class FlagsChangerViewModel @Inject constructor(
     }
 
     fun updateFlag(flagName: String, newValue: Boolean) {
-        val oldValue = (state.flags.find { it.name == flagName } as? ParcelableBoolFlag)?.value ?: false
-        val updated = state.flags.map {
-            if (it.name == flagName && it is ParcelableBoolFlag) it.copy(value = newValue)
-            else it
-        }.distinctBy { it.name }
-        state = state.copy(flags = updated)
-        filterFlags()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 rootDB.getRootDatabase().updateFlag(currentPackageName, flagName, newValue)
+                launch(Dispatchers.Main) {
+                    loadFlags(currentPackageName)
+                }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) {
-                    val rolledBack = state.flags.map {
-                        if (it.name == flagName && it is ParcelableBoolFlag) it.copy(value = oldValue)
-                        else it
-                    }.distinctBy { it.name }
-                    state = state.copy(flags = rolledBack, error = "Failed to update flag: ${e.message}")
-                    filterFlags()
+                    state = state.copy(error = "Failed to commit flag: ${e.message}")
                 }
             }
         }
@@ -106,22 +97,13 @@ class FlagsChangerViewModel @Inject constructor(
     fun addFlag(flagName: String, flagValue: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val phixitService = rootDB.getRootDatabase()
-                phixitService.addBoolFlag(currentPackageName, flagName, flagValue)
-                val updatedFlags = phixitService.getBoolFlags(currentPackageName).distinctBy { it.name }
+                rootDB.getRootDatabase().addBoolFlag(currentPackageName, flagName, flagValue)
                 launch(Dispatchers.Main) {
-                    state = state.copy(
-                        flags = updatedFlags,
-                        showAddDialog = false,
-                        newFlagName = "",
-                        newFlagValue = false
-                    )
-                    filterFlags()
+                    state = state.copy(showAddDialog = false, newFlagName = "", newFlagValue = false)
+                    loadFlags(currentPackageName)
                 }
             } catch (e: Exception) {
-                launch(Dispatchers.Main) {
-                    state = state.copy(error = "Failed to add flag: ${e.message}")
-                }
+                launch(Dispatchers.Main) { state = state.copy(error = "Failed to commit flag: ${e.message}") }
             }
         }
     }

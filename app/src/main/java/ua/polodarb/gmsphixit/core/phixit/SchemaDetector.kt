@@ -32,6 +32,8 @@ data class DetectedSchema(
     val flagsContentColumn: String? = null,
     /** Name of the column holding the package reference (e.g., static_config_package_id). */
     val packageIdColumn: String? = null,
+    /** Primary key in the package table, which may differ from the partition foreign key. */
+    val staticPackageIdColumn: String? = null,
     /** Name of the package name column (e.g., `name` in static_config_packages). */
     val packageNameColumn: String? = null,
     // ── flag_overrides persistence tables (Android 17 QPR Beta 4+) ──
@@ -177,6 +179,9 @@ object SchemaDetector {
             partitionIdColumn = partitionIdColumn,
             flagsContentColumn = flagsContentColumn,
             packageIdColumn = packageIdColumn,
+            staticPackageIdColumn = fuzzyMatchColumn(staticConfigPackagesColumns, listOf(
+                packageIdColumn ?: "", "static_config_package_id", "config_package_id", "package_id", "id"
+            )),
             packageNameColumn = packageNameColumn,
             flagOverridesTable = flagOverridesTable,
             flagOverridesToCommitTable = flagOverridesToCommitTable,

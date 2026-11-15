@@ -372,12 +372,6 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Issue #1: ALL FLAGS RESET AFTER 24 HOURS. This app is released in hope that the community can find a solution.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
                     }
                 }
 
